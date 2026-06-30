@@ -175,27 +175,27 @@ class DataStore:
         # HTTP first (server metadata, doesn't block sqlite section)
         if self._http is not None:
             try:
-                r = self._http.get(f"{self.endpoint}/v1/status")
+                # Server metadata lives on /v1/server/info (version, namespace).
+                # /v1/status was slimmed to connector/job aggregates only, which we
+                # read straight from metadata.db below — no need to call it here.
+                r = self._http.get(f"{self.endpoint}/v1/server/info")
                 if r.status_code == 200:
                     out.server_reachable = True
                     j = r.json()
-                    out.server_version = (
-                        j.get("server", {}).get("version")
-                        if isinstance(j, dict)
-                        else None
-                    )
-                    out.milvus_backend = (
-                        j.get("milvus", {}).get("backend")
-                        if isinstance(j, dict)
-                        else None
-                    )
-                    out.namespace = (
-                        j.get("namespace") or j.get("server", {}).get("namespace")
-                        if isinstance(j, dict)
-                        else None
-                    )
+                    if isinstance(j, dict):
+                        out.server_version = j.get("version")
+                        out.namespace = j.get("namespace")
             except httpx.HTTPError:
                 out.server_reachable = False
+
+        # Milvus backend isn't exposed over HTTP. Infer it the documented way:
+        # Milvus Lite writes a milvus.db next to metadata.db; a remote/Zilliz
+        # backend does not. Stay silent ("unknown") when the server is offline so
+        # we don't mislabel a stopped server as "remote".
+        if (self.db_path.parent / "milvus.db").exists():
+            out.milvus_backend = "lite"
+        elif out.server_reachable:
+            out.milvus_backend = "remote"
 
         # sqlite section — wrap each query so a partial server upgrade /
         # schema mismatch downgrades a panel rather than crashing the TUI.
